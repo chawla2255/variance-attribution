@@ -109,6 +109,7 @@ def run(raw: Path = RAW) -> Close:
     quality = pd.DataFrame([
         {"check": name, **con.execute(sql).df().iloc[0].to_dict()} for name, sql in CHECKS.items()
     ]).reindex(columns=["check", "lines", "net_usd", "detail"])
+    quality["net_usd"] = quality.net_usd.round(2)          # parallel sums differ in the last bits
     con.execute(FACT_SQL)
     fact = con.execute("SELECT * FROM fact").df()
     # Per currency: raw lines = clean fact + dropped duplicates + quarantined lines.
