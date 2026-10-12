@@ -1,0 +1,8 @@
+check,lines,net_usd,detail
+re-sent duplicate lines (dropped),25.00,165907.32,
+unknown SKU codes (quarantined),3.00,22613.16,RC1K
+credit notes (netted),60.00,-23205.14,
+markets without an FX rate,0.00,,
+sales to a region the SKU is not sold in,0.00,,
+budget lines with no sales,3.00,,
+sales with no budget (new products),92.00,680763.54,RC-MP
