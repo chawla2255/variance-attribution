@@ -115,6 +115,11 @@ def main() -> None:
     }
     page = TEMPLATE.read_text().replace("/*DATA*/null", json.dumps(data, separators=(",", ":")))
     (DOCS / "dashboard.html").write_text(page)
+    # GitHub Pages serves docs/: the site root opens the dashboard.
+    (DOCS / "index.html").write_text('<!doctype html><meta charset="utf-8"><title>Gross-Margin Bridge</title>'
+                                     '<meta http-equiv="refresh" content="0; url=dashboard.html">'
+                                     '<a href="dashboard.html">Open the dashboard</a>\n')
+    (DOCS / ".nojekyll").touch()
     print(f"wrote docs/ ({len(page) / 1e3:.0f} kB dashboard)")
 
 

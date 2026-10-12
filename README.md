@@ -11,8 +11,8 @@ finance lead can click through without re-running anything.
 
 ![Waterfall](docs/waterfall.png)
 
-**[Open the dashboard](docs/dashboard.html)** (download the file and open it in a browser; it
-is one self-contained page). It covers each of the 12 fiscal periods and year to date through
+**[Open the live dashboard](https://chawla2255.github.io/variance-attribution/)** (one
+self-contained page, also in [docs/dashboard.html](docs/dashboard.html)). It covers each of the 12 fiscal periods and year to date through
 any period. Click a driver in the waterfall, then a business unit, region and category to reach
 the SKUs.
 
