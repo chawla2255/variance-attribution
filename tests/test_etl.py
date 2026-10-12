@@ -2,12 +2,12 @@ import numpy as np
 import pandas as pd
 
 
-def test_clean_fact_reconciles_to_raw_extract(close):
-    q = close.quality.set_index("check")
-    r = close.reconciliation.iloc[0]
-    dropped = q.loc["re-sent duplicate lines (dropped)", "net_local"]
-    quarantined = q.loc["unknown SKU codes (quarantined)", "net_local"]
-    assert np.isclose(r.raw_net_local - dropped - quarantined, r.fact_net_local, atol=0.01)
+def test_clean_fact_reconciles_to_raw_extract_in_every_currency(close):
+    r = close.reconciliation
+    assert set(r.currency) == {"EUR", "GBP", "USD"}
+    gap = r.raw_net_local - r.duplicates_net_local - r.quarantined_net_local - r.fact_net_local
+    assert np.allclose(gap, 0, atol=0.01)
+    assert r.set_index("currency").loc["USD", "quarantined_net_local"] > 0      # the RC1K lines
 
 
 def test_quality_checks_find_the_planted_problems(close):

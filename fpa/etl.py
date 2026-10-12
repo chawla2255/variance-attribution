@@ -56,19 +56,28 @@ JOIN fx_rates fx ON fx.week = week AND fx.currency = m.currency
 ORDER BY week, sku, region
 """
 
+# Raw lines in USD at the week's actual rate. Currency comes from the region (each region trades
+# in one currency), so even lines with an unknown SKU code can be valued.
+LINES_USD_SQL = """
+CREATE OR REPLACE VIEW lines_usd AS
+SELECT l.*, l.gross_sales_local - l.discounts_local AS net_local,
+       (l.gross_sales_local - l.discounts_local) * fx.actual_rate AS net_usd, c.currency
+FROM sales_lines l
+JOIN (SELECT DISTINCT region, currency FROM markets) c USING (region)
+JOIN fx_rates fx ON fx.week = l.week AND fx.currency = c.currency
+"""
+
 CHECKS = {
     "re-sent duplicate lines (dropped)": """
-        SELECT COUNT(*) - (SELECT COUNT(*) FROM (SELECT DISTINCT * FROM sales_lines)) AS lines,
-               SUM(gross_sales_local - discounts_local)
-                 - (SELECT SUM(gross_sales_local - discounts_local) FROM (SELECT DISTINCT * FROM sales_lines)) AS net_local
-        FROM sales_lines""",
+        SELECT COUNT(*) - (SELECT COUNT(*) FROM (SELECT DISTINCT * FROM lines_usd)) AS lines,
+               SUM(net_usd) - (SELECT SUM(net_usd) FROM (SELECT DISTINCT * FROM lines_usd)) AS net_usd
+        FROM lines_usd""",
     "unknown SKU codes (quarantined)": """
-        SELECT COUNT(*) AS lines, SUM(gross_sales_local - discounts_local) AS net_local,
-               STRING_AGG(DISTINCT sku, ', ') AS detail
-        FROM (SELECT DISTINCT * FROM sales_lines) l ANTI JOIN sku_master s ON l.sku = s.sku""",
+        SELECT COUNT(*) AS lines, SUM(net_usd) AS net_usd, STRING_AGG(DISTINCT sku, ', ') AS detail
+        FROM (SELECT DISTINCT * FROM lines_usd) l ANTI JOIN sku_master s ON l.sku = s.sku""",
     "credit notes (netted)": """
-        SELECT COUNT(*) AS lines, SUM(gross_sales_local - discounts_local) AS net_local
-        FROM (SELECT DISTINCT * FROM sales_lines) WHERE units < 0""",
+        SELECT COUNT(*) AS lines, SUM(net_usd) AS net_usd
+        FROM (SELECT DISTINCT * FROM lines_usd) WHERE units < 0""",
     "markets without an FX rate": """
         SELECT COUNT(*) AS lines FROM (SELECT DISTINCT b.week, m.currency FROM budget b
             JOIN sku_master s USING (sku) JOIN markets m ON m.business_unit = s.business_unit AND m.region = b.region)
@@ -79,9 +88,8 @@ CHECKS = {
     "budget lines with no sales": """
         SELECT COUNT(*) AS lines FROM budget b ANTI JOIN sales_lines l USING (week, sku, region)""",
     "sales with no budget (new products)": """
-        SELECT COUNT(*) AS lines, SUM(gross_sales_local - discounts_local) AS net_local,
-               STRING_AGG(DISTINCT sku, ', ') AS detail
-        FROM (SELECT DISTINCT * FROM sales_lines) l SEMI JOIN sku_master s ON l.sku = s.sku
+        SELECT COUNT(*) AS lines, SUM(net_usd) AS net_usd, STRING_AGG(DISTINCT sku, ', ') AS detail
+        FROM (SELECT DISTINCT * FROM lines_usd) l SEMI JOIN sku_master s ON l.sku = s.sku
         ANTI JOIN budget b USING (week, sku, region)""",
 }
 
@@ -97,17 +105,24 @@ def run(raw: Path = RAW) -> Close:
     con = duckdb.connect()
     for name in ("sku_master", "markets", "budget", "sales_lines", "fx_rates"):
         con.execute(f"CREATE TABLE {name} AS SELECT * FROM read_csv_auto('{raw / (name + '.csv')}')")
+    con.execute(LINES_USD_SQL)
     quality = pd.DataFrame([
         {"check": name, **con.execute(sql).df().iloc[0].to_dict()} for name, sql in CHECKS.items()
-    ]).reindex(columns=["check", "lines", "net_local", "detail"])
+    ]).reindex(columns=["check", "lines", "net_usd", "detail"])
     con.execute(FACT_SQL)
     fact = con.execute("SELECT * FROM fact").df()
-    # Raw lines total = clean fact + dropped duplicates + quarantined lines, in local currency.
+    # Per currency: raw lines = clean fact + dropped duplicates + quarantined lines.
     reconciliation = con.execute("""
-        SELECT (SELECT SUM(gross_sales_local - discounts_local) FROM sales_lines) AS raw_net_local,
-               (SELECT SUM(a_net_local) FROM fact)                                  AS fact_net_local,
-               (SELECT SUM(units) FROM sales_lines)                                 AS raw_units,
-               (SELECT SUM(a_units) FROM fact)                                      AS fact_units
+        WITH raw AS (SELECT currency, SUM(net_local) AS raw_net_local, SUM(units) AS raw_units
+                     FROM lines_usd GROUP BY currency),
+        dedup AS (SELECT currency, SUM(net_local) AS dedup_net_local FROM (SELECT DISTINCT * FROM lines_usd) GROUP BY currency),
+        quarantined AS (SELECT currency, SUM(net_local) AS quarantined_net_local
+                        FROM (SELECT DISTINCT * FROM lines_usd) l ANTI JOIN sku_master s ON l.sku = s.sku GROUP BY currency),
+        clean AS (SELECT currency, SUM(a_net_local) AS fact_net_local FROM fact GROUP BY currency)
+        SELECT currency, raw_net_local, raw_net_local - dedup_net_local AS duplicates_net_local,
+               COALESCE(quarantined_net_local, 0) AS quarantined_net_local, fact_net_local
+        FROM raw JOIN dedup USING (currency) JOIN clean USING (currency)
+        LEFT JOIN quarantined USING (currency) ORDER BY currency
     """).df()
     con.close()
     return Close(fact, quality, reconciliation)
